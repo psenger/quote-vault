@@ -1,22 +1,18 @@
 package router
 
 import (
-	"github.com/gorilla/mux"
+	"net/http"
 	"quote-vault/handlers"
+	"quote-vault/middleware"
 )
 
-// SetupRoutes configures all API routes
-func SetupRoutes() *mux.Router {
-	r := mux.NewRouter()
-	
-	// API prefix
-	api := r.PathPrefix("/api/v1").Subrouter()
-	
-	// Quote routes
-	api.HandleFunc("/quotes", handlers.GetQuotes).Methods("GET")
-	api.HandleFunc("/quotes", handlers.CreateQuote).Methods("POST")
-	api.HandleFunc("/quotes/random", handlers.GetRandomQuote).Methods("GET")
-	api.HandleFunc("/quotes/random/{category}", handlers.GetRandomQuoteByCategory).Methods("GET")
-	
-	return r
+// SetupRoutes configures and returns the HTTP router
+func SetupRoutes() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	// Apply CORS middleware to all routes
+	mux.HandleFunc("/quotes", middleware.CORS(middleware.Logging(middleware.ValidateQuoteInput(handlers.HandleQuotes))))
+	mux.HandleFunc("/quotes/random", middleware.CORS(middleware.Logging(handlers.GetRandomQuote)))
+
+	return mux
 }

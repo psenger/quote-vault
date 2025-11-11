@@ -3,21 +3,43 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"quote-vault/database"
 	"quote-vault/router"
 )
 
 func main() {
-	// Initialize database
-	if err := database.InitDB(); err != nil {
-		log.Fatal("Failed to initialize database:", err)
+	// Connect to database
+	if err := database.Connect(); err != nil {
+		log.Fatal("Failed to connect to database:", err)
 	}
-	defer database.CloseDB()
+	defer database.Close()
 
-	// Setup routes
-	r := router.SetupRoutes()
+	// Setup graceful shutdown
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-c
+		log.Println("Shutting down gracefully...")
+		if err := database.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		}
+		os.Exit(0)
+	}()
+
+	// Setup router
+	r := router.SetupRouter()
 
 	// Start server
-	log.Println("Server starting on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Server starting on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, r))
 }

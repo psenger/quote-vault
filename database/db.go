@@ -4,114 +4,100 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
+	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/quote-vault/models"
 )
 
-type DB struct {
-	conn *sql.DB
-}
+var DB *sql.DB
 
-var database *DB
-
-func Init() error {
-	// For now, use SQLite for simplicity
-	connStr := "file:quotes.db?cache=shared&mode=rwc"
-	db, err := sql.Open("sqlite3", connStr)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+func Connect() error {
+	host := os.Getenv("DB_HOST")
+	if host == "" {
+		host = "localhost"
 	}
 
-	if err := db.Ping(); err != nil {
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = "5432"
+	}
+
+	user := os.Getenv("DB_USER")
+	if user == "" {
+		user = "postgres"
+	}
+
+	password := os.Getenv("DB_PASSWORD")
+	dbname := os.Getenv("DB_NAME")
+	if dbname == "" {
+		dbname = "quote_vault"
+	}
+
+	psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+
+	var err error
+	DB, err = sql.Open("postgres", psqlInfo)
+	if err != nil {
+		return fmt.Errorf("failed to open database connection: %w", err)
+	}
+
+	// Configure connection pool
+	maxOpenConns := getEnvAsInt("DB_MAX_OPEN_CONNS", 25)
+	maxIdleConns := getEnvAsInt("DB_MAX_IDLE_CONNS", 25)
+	maxConnLifetime := getEnvAsInt("DB_MAX_CONN_LIFETIME", 5) // minutes
+
+	DB.SetMaxOpenConns(maxOpenConns)
+	DB.SetMaxIdleConns(maxIdleConns)
+	DB.SetConnMaxLifetime(time.Duration(maxConnLifetime) * time.Minute)
+
+	// Test the connection
+	if err = DB.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	database = &DB{conn: db}
-	
-	// Create quotes table
-	if err := database.createTables(); err != nil {
+	log.Println("Successfully connected to database")
+	return createTables()
+}
+
+func createTables() error {
+	query := `
+	CREATE TABLE IF NOT EXISTS quotes (
+		id SERIAL PRIMARY KEY,
+		text TEXT NOT NULL,
+		author VARCHAR(255) NOT NULL,
+		category VARCHAR(100) NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_quotes_category ON quotes(category);
+	CREATE INDEX IF NOT EXISTS idx_quotes_author ON quotes(author);
+	`
+
+	_, err := DB.Exec(query)
+	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
-	log.Println("Database connected successfully")
+	log.Println("Database tables created successfully")
 	return nil
 }
 
-func (db *DB) createTables() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS quotes (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		text TEXT NOT NULL,
-		author TEXT NOT NULL,
-		category TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-	
-	_, err := db.conn.Exec(query)
-	return err
-}
-
-func GetDB() *DB {
-	return database
-}
-
-func (db *DB) AddQuote(quote *models.Quote) error {
-	query := `INSERT INTO quotes (text, author, category) VALUES (?, ?, ?)`
-	result, err := db.conn.Exec(query, quote.Text, quote.Author, quote.Category)
-	if err != nil {
-		return err
-	}
-	
-	id, err := result.LastInsertId()
-	if err != nil {
-		return err
-	}
-	
-	quote.ID = int(id)
-	return nil
-}
-
-func (db *DB) GetRandomQuote(category string) (*models.Quote, error) {
-	var query string
-	var args []interface{}
-	
-	if category != "" {
-		query = `SELECT id, text, author, category FROM quotes WHERE category = ? ORDER BY RANDOM() LIMIT 1`
-		args = append(args, category)
-	} else {
-		query = `SELECT id, text, author, category FROM quotes ORDER BY RANDOM() LIMIT 1`
-	}
-	
-	row := db.conn.QueryRow(query, args...)
-	
-	quote := &models.Quote{}
-	err := row.Scan(&quote.ID, &quote.Text, &quote.Author, &quote.Category)
-	if err != nil {
-		return nil, err
-	}
-	
-	return quote, nil
-}
-
-func (db *DB) GetAllQuotes(offset, limit int) ([]*models.Quote, error) {
-	query := `SELECT id, text, author, category FROM quotes LIMIT ? OFFSET ?`
-	rows, err := db.conn.Query(query, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	
-	var quotes []*models.Quote
-	for rows.Next() {
-		quote := &models.Quote{}
-		err := rows.Scan(&quote.ID, &quote.Text, &quote.Author, &quote.Category)
-		if err != nil {
-			return nil, err
+func getEnvAsInt(key string, defaultVal int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
 		}
-		quotes = append(quotes, quote)
 	}
-	
-	return quotes, nil
+	return defaultVal
+}
+
+func Close() error {
+	if DB != nil {
+		return DB.Close()
+	}
+	return nil
 }

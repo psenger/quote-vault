@@ -1,43 +1,83 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
 
-	"github.com/gin-gonic/gin"
+	"github.com/gorilla/mux"
 	"quote-vault/models"
+	"quote-vault/services"
 )
 
-// QuoteHandler handles all quote-related HTTP requests
 type QuoteHandler struct {
-	// In-memory storage for now, will be replaced with database later
-	quotes []models.Quote
-	nextID int
+	service *services.QuoteService
 }
 
-// NewQuoteHandler creates a new QuoteHandler instance
-func NewQuoteHandler() *QuoteHandler {
-	return &QuoteHandler{
-		quotes: make([]models.Quote, 0),
-		nextID: 1,
+func NewQuoteHandler(service *services.QuoteService) *QuoteHandler {
+	return &QuoteHandler{service: service}
+}
+
+func (h *QuoteHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
+	var quote models.Quote
+
+	if r.ContentLength == 0 {
+		http.Error(w, "Request body is empty", http.StatusBadRequest)
+		return
 	}
+
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&quote); err != nil {
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+
+	if quote.Text == "" || quote.Author == "" {
+		http.Error(w, "Quote text and author are required", http.StatusBadRequest)
+		return
+	}
+
+	createdQuote, err := h.service.CreateQuote(&quote)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(createdQuote)
 }
 
-// AddQuote handles POST /quotes - adds a new quote
-func (h *QuoteHandler) AddQuote(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented yet"})
+func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
+	category := r.URL.Query().Get("category")
+
+	quote, err := h.service.GetRandomQuote(category)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(quote)
 }
 
-// GetRandomQuote handles GET /quotes/random - returns a random quote
-func (h *QuoteHandler) GetRandomQuote(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented yet"})
-}
+func (h *QuoteHandler) GetAllQuotes(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
-// GetRandomQuoteByCategory handles GET /quotes/random/:category - returns a random quote from category
-func (h *QuoteHandler) GetRandomQuoteByCategory(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented yet"})
-}
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
 
-// ListQuotes handles GET /quotes - returns all quotes with pagination
-func (h *QuoteHandler) ListQuotes(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented yet"})
+	quotes, err := h.service.GetAllQuotes(page, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(quotes)
 }

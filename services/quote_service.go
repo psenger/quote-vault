@@ -1,94 +1,116 @@
 package services
 
 import (
+	"database/sql"
 	"errors"
 	"math/rand"
+	"quote-vault/database"
 	"quote-vault/models"
-	"strings"
 	"time"
 )
 
 type QuoteService struct {
-	quotes []models.Quote
-	nextID int
+	db *database.DB
 }
 
-func NewQuoteService() *QuoteService {
+func NewQuoteService(db *database.DB) *QuoteService {
 	rand.Seed(time.Now().UnixNano())
-	return &QuoteService{
-		quotes: make([]models.Quote, 0),
-		nextID: 1,
-	}
+	return &QuoteService{db: db}
 }
 
-func (s *QuoteService) AddQuote(text, author, category string) (*models.Quote, error) {
-	if strings.TrimSpace(text) == "" {
-		return nil, errors.New("quote text cannot be empty")
-	}
-	if strings.TrimSpace(author) == "" {
-		return nil, errors.New("author cannot be empty")
-	}
-	if strings.TrimSpace(category) == "" {
-		return nil, errors.New("category cannot be empty")
+func (s *QuoteService) CreateQuote(text, author, category string) (*models.Quote, error) {
+	if text == "" || author == "" || category == "" {
+		return nil, errors.New("text, author, and category are required")
 	}
 
-	quote := models.Quote{
-		ID:       s.nextID,
-		Text:     strings.TrimSpace(text),
-		Author:   strings.TrimSpace(author),
-		Category: strings.TrimSpace(category),
+	query := `INSERT INTO quotes (text, author, category, created_at) VALUES (?, ?, ?, ?)`
+	result, err := s.db.Exec(query, text, author, category, time.Now())
+	if err != nil {
+		return nil, err
 	}
 
-	s.quotes = append(s.quotes, quote)
-	s.nextID++
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.Quote{
+		ID:        int(id),
+		Text:      text,
+		Author:    author,
+		Category:  category,
+		CreatedAt: time.Now(),
+	}, nil
+}
+
+func (s *QuoteService) GetRandomQuote(category string) (*models.Quote, error) {
+	var query string
+	var args []interface{}
+
+	if category != "" {
+		query = `SELECT id, text, author, category, created_at FROM quotes WHERE category = ? ORDER BY RANDOM() LIMIT 1`
+		args = []interface{}{category}
+	} else {
+		query = `SELECT id, text, author, category, created_at FROM quotes ORDER BY RANDOM() LIMIT 1`
+		args = []interface{}{}
+	}
+
+	var quote models.Quote
+	err := s.db.QueryRow(query, args...).Scan(
+		&quote.ID,
+		&quote.Text,
+		&quote.Author,
+		&quote.Category,
+		&quote.CreatedAt,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
 
 	return &quote, nil
 }
 
-func (s *QuoteService) GetRandomQuote() (*models.Quote, error) {
-	if len(s.quotes) == 0 {
-		return nil, errors.New("no quotes available")
+func (s *QuoteService) ListQuotes(page, limit int) ([]models.Quote, int, error) {
+	offset := (page - 1) * limit
+
+	// Get total count
+	var total int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM quotes").Scan(&total)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	index := rand.Intn(len(s.quotes))
-	return &s.quotes[index], nil
-}
+	// Get quotes with pagination
+	query := `SELECT id, text, author, category, created_at FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	rows, err := s.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
 
-func (s *QuoteService) GetRandomQuoteByCategory(category string) (*models.Quote, error) {
-	categoryQuotes := make([]models.Quote, 0)
-
-	for _, quote := range s.quotes {
-		if strings.EqualFold(quote.Category, category) {
-			categoryQuotes = append(categoryQuotes, quote)
+	var quotes []models.Quote
+	for rows.Next() {
+		var quote models.Quote
+		err := rows.Scan(
+			&quote.ID,
+			&quote.Text,
+			&quote.Author,
+			&quote.Category,
+			&quote.CreatedAt,
+		)
+		if err != nil {
+			return nil, 0, err
 		}
+		quotes = append(quotes, quote)
 	}
 
-	if len(categoryQuotes) == 0 {
-		return nil, errors.New("no quotes found for this category")
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
 	}
 
-	index := rand.Intn(len(categoryQuotes))
-	return &categoryQuotes[index], nil
-}
-
-func (s *QuoteService) GetAllQuotes(offset, limit int) ([]models.Quote, error) {
-	if offset < 0 || limit < 0 {
-		return nil, errors.New("offset and limit must be non-negative")
-	}
-
-	totalQuotes := len(s.quotes)
-	if offset >= totalQuotes {
-		return []models.Quote{}, nil
-	}
-
-	end := offset + limit
-	if end > totalQuotes {
-		end = totalQuotes
-	}
-
-	return s.quotes[offset:end], nil
-}
-
-func (s *QuoteService) GetQuoteCount() int {
-	return len(s.quotes)
+	return quotes, total, nil
 }

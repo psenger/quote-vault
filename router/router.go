@@ -2,17 +2,61 @@ package router
 
 import (
 	"net/http"
+
 	"quote-vault/handlers"
 	"quote-vault/middleware"
 )
 
-// SetupRoutes configures and returns the HTTP router
-func SetupRoutes() *http.ServeMux {
+func SetupRoutes(quoteHandler *handlers.QuoteHandler) http.Handler {
 	mux := http.NewServeMux()
 
-	// Apply CORS middleware to all routes
-	mux.HandleFunc("/quotes", middleware.CORS(middleware.Logging(middleware.ValidateQuoteInput(handlers.HandleQuotes))))
-	mux.HandleFunc("/quotes/random", middleware.CORS(middleware.Logging(handlers.GetRandomQuote)))
+	// Quote routes
+	mux.HandleFunc("/api/quotes", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			quoteHandler.CreateQuote(w, r)
+		case http.MethodGet:
+			quoteHandler.GetQuotes(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
-	return mux
+	mux.HandleFunc("/api/quotes/random", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		quoteHandler.GetRandomQuote(w, r)
+	})
+
+	// Filter routes
+	mux.HandleFunc("/api/quotes/category/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		quoteHandler.GetQuotesByCategory(w, r)
+	})
+
+	mux.HandleFunc("/api/quotes/author/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		quoteHandler.GetQuotesByAuthor(w, r)
+	})
+
+	// Health check
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	// Apply middleware
+	handler := middleware.CORS(mux)
+	handler = middleware.Logging(handler)
+	handler = middleware.ValidationMiddleware(handler)
+
+	return handler
 }

@@ -2,57 +2,43 @@ package services
 
 import (
 	"database/sql"
-	"errors"
-	"math/rand"
-	"quote-vault/database"
+	"fmt"
+
 	"quote-vault/models"
-	"time"
 )
 
 type QuoteService struct {
-	db *database.DB
+	db *sql.DB
 }
 
-func NewQuoteService(db *database.DB) *QuoteService {
-	rand.Seed(time.Now().UnixNano())
+func NewQuoteService(db *sql.DB) *QuoteService {
 	return &QuoteService{db: db}
 }
 
-func (s *QuoteService) CreateQuote(text, author, category string) (*models.Quote, error) {
-	if text == "" || author == "" || category == "" {
-		return nil, errors.New("text, author, and category are required")
-	}
-
-	query := `INSERT INTO quotes (text, author, category, created_at) VALUES (?, ?, ?, ?)`
-	result, err := s.db.Exec(query, text, author, category, time.Now())
-	if err != nil {
-		return nil, err
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-
-	return &models.Quote{
-		ID:        int(id),
-		Text:      text,
-		Author:    author,
-		Category:  category,
-		CreatedAt: time.Now(),
-	}, nil
+func (s *QuoteService) CreateQuote(quote *models.Quote) error {
+	query := `INSERT INTO quotes (text, author, category) VALUES (?, ?, ?) RETURNING id, created_at`
+	err := s.db.QueryRow(query, quote.Text, quote.Author, quote.Category).Scan(&quote.ID, &quote.CreatedAt)
+	return err
 }
 
-func (s *QuoteService) GetRandomQuote(category string) (*models.Quote, error) {
+func (s *QuoteService) GetRandomQuote(category, author string) (*models.Quote, error) {
 	var query string
 	var args []interface{}
 
-	if category != "" {
-		query = `SELECT id, text, author, category, created_at FROM quotes WHERE category = ? ORDER BY RANDOM() LIMIT 1`
+	baseQuery := "SELECT id, text, author, category, created_at FROM quotes"
+	orderBy := " ORDER BY RANDOM() LIMIT 1"
+
+	if category != "" && author != "" {
+		query = baseQuery + " WHERE category = ? AND author = ?" + orderBy
+		args = []interface{}{category, author}
+	} else if category != "" {
+		query = baseQuery + " WHERE category = ?" + orderBy
 		args = []interface{}{category}
+	} else if author != "" {
+		query = baseQuery + " WHERE author = ?" + orderBy
+		args = []interface{}{author}
 	} else {
-		query = `SELECT id, text, author, category, created_at FROM quotes ORDER BY RANDOM() LIMIT 1`
-		args = []interface{}{}
+		query = baseQuery + orderBy
 	}
 
 	var quote models.Quote
@@ -65,28 +51,47 @@ func (s *QuoteService) GetRandomQuote(category string) (*models.Quote, error) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
 		return nil, err
 	}
 
 	return &quote, nil
 }
 
-func (s *QuoteService) ListQuotes(page, limit int) ([]models.Quote, int, error) {
+func (s *QuoteService) GetQuotes(page, limit int, category, author string) ([]models.Quote, int, error) {
 	offset := (page - 1) * limit
 
+	// Build WHERE clause
+	var whereClause string
+	var args []interface{}
+	var countArgs []interface{}
+
+	if category != "" && author != "" {
+		whereClause = " WHERE category = ? AND author = ?"
+		args = []interface{}{category, author}
+		countArgs = []interface{}{category, author}
+	} else if category != "" {
+		whereClause = " WHERE category = ?"
+		args = []interface{}{category}
+		countArgs = []interface{}{category}
+	} else if author != "" {
+		whereClause = " WHERE author = ?"
+		args = []interface{}{author}
+		countArgs = []interface{}{author}
+	}
+
 	// Get total count
+	countQuery := "SELECT COUNT(*) FROM quotes" + whereClause
 	var total int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM quotes").Scan(&total)
+	err := s.db.QueryRow(countQuery, countArgs...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// Get quotes with pagination
-	query := `SELECT id, text, author, category, created_at FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?`
-	rows, err := s.db.Query(query, limit, offset)
+	query := fmt.Sprintf("SELECT id, text, author, category, created_at FROM quotes%s ORDER BY created_at DESC LIMIT ? OFFSET ?", whereClause)
+	args = append(args, limit, offset)
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -106,10 +111,6 @@ func (s *QuoteService) ListQuotes(page, limit int) ([]models.Quote, int, error) 
 			return nil, 0, err
 		}
 		quotes = append(quotes, quote)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, 0, err
 	}
 
 	return quotes, total, nil

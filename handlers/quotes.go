@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"quote-vault/models"
 	"quote-vault/services"
 )
 
@@ -13,119 +14,152 @@ type QuoteHandler struct {
 	quoteService *services.QuoteService
 }
 
-type QuoteResponse struct {
-	ID       int    `json:"id"`
-	Text     string `json:"text"`
-	Author   string `json:"author"`
-	Category string `json:"category"`
-}
-
-type CreateQuoteRequest struct {
-	Text     string `json:"text" validate:"required,min=10"`
-	Author   string `json:"author" validate:"required"`
-	Category string `json:"category" validate:"required"`
-}
-
-type PaginatedQuotesResponse struct {
-	Quotes []QuoteResponse `json:"quotes"`
-	Page   int             `json:"page"`
-	Limit  int             `json:"limit"`
-	Total  int             `json:"total"`
-}
-
 func NewQuoteHandler(quoteService *services.QuoteService) *QuoteHandler {
-	return &QuoteHandler{
-		quoteService: quoteService,
-	}
+	return &QuoteHandler{quoteService: quoteService}
 }
 
 func (h *QuoteHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
-	var req CreateQuoteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	var quote models.Quote
+	if err := json.NewDecoder(r.Body).Decode(&quote); err != nil {
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
 
-	quote, err := h.quoteService.CreateQuote(req.Text, req.Author, req.Category)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := h.quoteService.CreateQuote(&quote); err != nil {
+		http.Error(w, "Failed to create quote", http.StatusInternalServerError)
 		return
-	}
-
-	response := QuoteResponse{
-		ID:       quote.ID,
-		Text:     quote.Text,
-		Author:   quote.Author,
-		Category: quote.Category,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(quote)
 }
 
 func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
-	// Trim whitespace and handle empty string
-	category = strings.TrimSpace(category)
-	if category == "" {
-		category = ""
-	}
+	author := r.URL.Query().Get("author")
 
-	quote, err := h.quoteService.GetRandomQuote(category)
+	quote, err := h.quoteService.GetRandomQuote(category, author)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to get random quote", http.StatusInternalServerError)
 		return
 	}
 
-	if quote == nil {
-		http.Error(w, "No quotes found", http.StatusNotFound)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(quote)
+}
+
+func (h *QuoteHandler) GetQuotes(w http.ResponseWriter, r *http.Request) {
+	page := 1
+	limit := 10
+	category := r.URL.Query().Get("category")
+	author := r.URL.Query().Get("author")
+
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	quotes, total, err := h.quoteService.GetQuotes(page, limit, category, author)
+	if err != nil {
+		http.Error(w, "Failed to get quotes", http.StatusInternalServerError)
 		return
 	}
 
-	response := QuoteResponse{
-		ID:       quote.ID,
-		Text:     quote.Text,
-		Author:   quote.Author,
-		Category: quote.Category,
+	response := map[string]interface{}{
+		"quotes": quotes,
+		"page":   page,
+		"limit":  limit,
+		"total":  total,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func (h *QuoteHandler) ListQuotes(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
-
-	quotes, total, err := h.quoteService.ListQuotes(page, limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+func (h *QuoteHandler) GetQuotesByCategory(w http.ResponseWriter, r *http.Request) {
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) < 4 {
+		http.Error(w, "Category not specified", http.StatusBadRequest)
 		return
 	}
+	category := pathParts[3]
 
-	responseQuotes := make([]QuoteResponse, len(quotes))
-	for i, quote := range quotes {
-		responseQuotes[i] = QuoteResponse{
-			ID:       quote.ID,
-			Text:     quote.Text,
-			Author:   quote.Author,
-			Category: quote.Category,
+	page := 1
+	limit := 10
+
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
 		}
 	}
 
-	response := PaginatedQuotesResponse{
-		Quotes: responseQuotes,
-		Page:   page,
-		Limit:  limit,
-		Total:  total,
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	quotes, total, err := h.quoteService.GetQuotes(page, limit, category, "")
+	if err != nil {
+		http.Error(w, "Failed to get quotes by category", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"quotes":   quotes,
+		"category": category,
+		"page":     page,
+		"limit":    limit,
+		"total":    total,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (h *QuoteHandler) GetQuotesByAuthor(w http.ResponseWriter, r *http.Request) {
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) < 4 {
+		http.Error(w, "Author not specified", http.StatusBadRequest)
+		return
+	}
+	author := pathParts[3]
+
+	page := 1
+	limit := 10
+
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	quotes, total, err := h.quoteService.GetQuotes(page, limit, "", author)
+	if err != nil {
+		http.Error(w, "Failed to get quotes by author", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"quotes": quotes,
+		"author": author,
+		"page":   page,
+		"limit":  limit,
+		"total":  total,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

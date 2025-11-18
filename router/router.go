@@ -1,35 +1,29 @@
 package router
 
 import (
-	"net/http"
-
-	"quote-vault/handlers"
-	"quote-vault/middleware"
-
 	"github.com/gorilla/mux"
+	"github.com/quote-vault/handlers"
+	"github.com/quote-vault/middleware"
 )
 
-func SetupRoutes(quoteHandler *handlers.QuoteHandler) *mux.Router {
+func NewRouter() *mux.Router {
 	r := mux.NewRouter()
 
-	// Apply middleware
+	// Apply global middleware
 	r.Use(middleware.LoggingMiddleware)
-	r.Use(middleware.CORSMiddleware)
+	r.Use(middleware.CorsMiddleware)
 
 	// API routes
 	api := r.PathPrefix("/api/v1").Subrouter()
 
-	// Quote routes
-	api.HandleFunc("/quotes", middleware.ValidationMiddleware(quoteHandler.CreateQuote)).Methods("POST")
-	api.HandleFunc("/quotes", quoteHandler.ListQuotes).Methods("GET")
-	api.HandleFunc("/quotes/random", quoteHandler.GetRandomQuote).Methods("GET")
-	api.HandleFunc("/quotes/search", quoteHandler.SearchQuotes).Methods("GET")
+	// Health check endpoint
+	r.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
 
-	// Health check
-	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	}).Methods("GET")
+	// Quote routes
+	api.HandleFunc("/quotes", handlers.GetQuotes).Methods("GET")
+	api.HandleFunc("/quotes", middleware.ValidateQuoteMiddleware(handlers.CreateQuote)).Methods("POST")
+	api.HandleFunc("/quotes/random", handlers.GetRandomQuote).Methods("GET")
+	api.HandleFunc("/quotes/random/{category}", handlers.GetRandomQuoteByCategory).Methods("GET")
 
 	return r
 }

@@ -3,46 +3,59 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"strings"
-
 	"quote-vault/services"
+	"strconv"
 )
 
 type QuoteHandler struct {
-	QuoteService *services.QuoteService
+	service *services.QuoteService
 }
 
-func NewQuoteHandler(quoteService *services.QuoteService) *QuoteHandler {
-	return &QuoteHandler{
-		QuoteService: quoteService,
-	}
+func NewQuoteHandler(service *services.QuoteService) *QuoteHandler {
+	return &QuoteHandler{service: service}
+}
+
+type CreateQuoteRequest struct {
+	Text     string `json:"text"`
+	Author   string `json:"author"`
+	Category string `json:"category"`
+}
+
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
 }
 
 func (h *QuoteHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
-	var quote services.CreateQuoteRequest
-	if err := json.NewDecoder(r.Body).Decode(&quote); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	var req CreateQuoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON"})
 		return
 	}
 
-	createdQuote, err := h.QuoteService.CreateQuote(quote)
+	quote, err := h.service.CreateQuote(req.Text, req.Author, req.Category)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Validation failed", Message: err.Error()})
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(createdQuote)
+	json.NewEncoder(w).Encode(quote)
 }
 
 func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
 
-	quote, err := h.QuoteService.GetRandomQuote(category)
+	quote, err := h.service.GetRandomQuote(category)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Quote not found", Message: err.Error()})
 		return
 	}
 
@@ -50,18 +63,12 @@ func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(quote)
 }
 
-func (h *QuoteHandler) ListQuotes(w http.ResponseWriter, r *http.Request) {
-	pageStr := r.URL.Query().Get("page")
+func (h *QuoteHandler) GetQuotes(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
 
-	page := 1
-	limit := 10
-
-	if pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
-		}
-	}
+	limit := 10 // default
+	offset := 0 // default
 
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
@@ -69,55 +76,29 @@ func (h *QuoteHandler) ListQuotes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	quotes, err := h.QuoteService.ListQuotes(page, limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(quotes)
-}
-
-func (h *QuoteHandler) SearchQuotes(w http.ResponseWriter, r *http.Request) {
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	author := strings.TrimSpace(r.URL.Query().Get("author"))
-	pageStr := r.URL.Query().Get("page")
-	limitStr := r.URL.Query().Get("limit")
-
-	if query == "" && author == "" {
-		http.Error(w, "Search query or author parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	page := 1
-	limit := 10
-
-	if pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
 		}
 	}
 
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
-			limit = l
-		}
-	}
-
-	searchParams := services.SearchParams{
-		Query:  query,
-		Author: author,
-		Page:   page,
-		Limit:  limit,
-	}
-
-	results, err := h.QuoteService.SearchQuotes(searchParams)
+	quotes, err := h.service.GetQuotes(limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to retrieve quotes"})
 		return
 	}
 
+	count, _ := h.service.GetQuoteCount()
+
+	response := map[string]interface{}{
+		"quotes": quotes,
+		"total":  count,
+		"limit":  limit,
+		"offset": offset,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	json.NewEncoder(w).Encode(response)
 }

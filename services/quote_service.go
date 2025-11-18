@@ -1,94 +1,116 @@
 package services
 
 import (
-	"database/sql"
-	"fmt"
+	"errors"
+	"quote-vault/database"
 	"quote-vault/models"
-	"quote-vault/validators"
 )
 
+var (
+	ErrQuoteNotFound = errors.New("quote not found")
+	ErrInvalidLimit  = errors.New("limit must be between 1 and 100")
+	ErrInvalidOffset = errors.New("offset must be non-negative")
+)
+
+// QuoteService handles business logic for quotes
 type QuoteService struct {
-	db        *sql.DB
-	validator *validators.QuoteValidator
+	repo database.QuoteRepository
 }
 
-func NewQuoteService(db *sql.DB) *QuoteService {
+// NewQuoteService creates a new quote service
+func NewQuoteService(repo database.QuoteRepository) *QuoteService {
 	return &QuoteService{
-		db:        db,
-		validator: validators.NewQuoteValidator(),
+		repo: repo,
 	}
 }
 
+// CreateQuote creates a new quote
 func (s *QuoteService) CreateQuote(text, author, category string) (*models.Quote, error) {
-	if err := s.validator.ValidateQuote(text, author, category); err != nil {
+	quote := &models.Quote{
+		Text:     text,
+		Author:   author,
+		Category: category,
+	}
+
+	err := s.repo.CreateQuote(quote)
+	if err != nil {
 		return nil, err
 	}
 
-	query := `INSERT INTO quotes (text, author, category) VALUES ($1, $2, $3) RETURNING id, created_at`
-	var quote models.Quote
-	quote.Text = text
-	quote.Author = author
-	quote.Category = category
-
-	err := s.db.QueryRow(query, text, author, category).Scan(&quote.ID, &quote.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create quote: %w", err)
-	}
-
-	return &quote, nil
+	return quote, nil
 }
 
+// GetQuoteByID retrieves a quote by ID
+func (s *QuoteService) GetQuoteByID(id int) (*models.Quote, error) {
+	quote, err := s.repo.GetQuoteByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if quote == nil {
+		return nil, ErrQuoteNotFound
+	}
+	return quote, nil
+}
+
+// GetRandomQuote retrieves a random quote
 func (s *QuoteService) GetRandomQuote(category string) (*models.Quote, error) {
-	var query string
-	var args []interface{}
+	quote, err := s.repo.GetRandomQuote(category)
+	if err != nil {
+		return nil, err
+	}
+	if quote == nil {
+		return nil, ErrQuoteNotFound
+	}
+	return quote, nil
+}
+
+// GetQuotes retrieves quotes with pagination
+func (s *QuoteService) GetQuotes(limit, offset int, category string) (*models.PaginatedQuotes, error) {
+	if err := s.validatePagination(limit, offset); err != nil {
+		return nil, err
+	}
+
+	var quotes []*models.Quote
+	var total int
+	var err error
 
 	if category != "" {
-		query = `SELECT id, text, author, category, created_at FROM quotes WHERE category = $1 ORDER BY RANDOM() LIMIT 1`
-		args = []interface{}{category}
-	else {
-		query = `SELECT id, text, author, category, created_at FROM quotes ORDER BY RANDOM() LIMIT 1`
-	}
-
-	var quote models.Quote
-	err := s.db.QueryRow(query, args...).Scan(
-		&quote.ID, &quote.Text, &quote.Author, &quote.Category, &quote.CreatedAt,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("no quotes found")
-		}
-		return nil, fmt.Errorf("failed to get random quote: %w", err)
-	}
-
-	return &quote, nil
-}
-
-func (s *QuoteService) GetQuotes(limit, offset int) ([]models.Quote, error) {
-	query := `SELECT id, text, author, category, created_at FROM quotes ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-	rows, err := s.db.Query(query, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get quotes: %w", err)
-	}
-	defer rows.Close()
-
-	var quotes []models.Quote
-	for rows.Next() {
-		var quote models.Quote
-		err := rows.Scan(&quote.ID, &quote.Text, &quote.Author, &quote.Category, &quote.CreatedAt)
+		quotes, err = s.repo.GetQuotesByCategory(category, limit, offset)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan quote: %w", err)
+			return nil, err
 		}
-		quotes = append(quotes, quote)
+		total, err = s.repo.GetTotalQuotesByCategoryCount(category)
+	} else {
+		quotes, err = s.repo.GetQuotes(limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		total, err = s.repo.GetTotalQuotesCount()
 	}
 
-	return quotes, nil
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.PaginatedQuotes{
+		Quotes: quotes,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	}, nil
 }
 
-func (s *QuoteService) GetQuoteCount() (int, error) {
-	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM quotes").Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get quote count: %w", err)
+// GetCategories retrieves all unique categories
+func (s *QuoteService) GetCategories() ([]string, error) {
+	return s.repo.GetCategories()
+}
+
+func (s *QuoteService) validatePagination(limit, offset int) error {
+	if limit < 1 || limit > 100 {
+		return ErrInvalidLimit
 	}
-	return count, nil
+	if offset < 0 {
+		return ErrInvalidOffset
+	}
+	return nil
 }

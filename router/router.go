@@ -1,29 +1,31 @@
 package router
 
 import (
-	"github.com/gorilla/mux"
-	"github.com/quote-vault/handlers"
-	"github.com/quote-vault/middleware"
+	"github.com/gin-gonic/gin"
+	"quote-vault/handlers"
+	"quote-vault/middleware"
 )
 
-func NewRouter() *mux.Router {
-	r := mux.NewRouter()
+func SetupRouter(quoteHandler *handlers.QuoteHandler, healthHandler *handlers.HealthHandler) *gin.Engine {
+	r := gin.New()
 
-	// Apply global middleware
-	r.Use(middleware.LoggingMiddleware)
-	r.Use(middleware.CorsMiddleware)
-
-	// API routes
-	api := r.PathPrefix("/api/v1").Subrouter()
+	// Global middleware
+	r.Use(middleware.LoggingMiddleware())
+	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.ErrorHandlerMiddleware())
 
 	// Health check endpoint
-	r.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
+	r.GET("/health", healthHandler.HealthCheck)
 
-	// Quote routes
-	api.HandleFunc("/quotes", handlers.GetQuotes).Methods("GET")
-	api.HandleFunc("/quotes", middleware.ValidateQuoteMiddleware(handlers.CreateQuote)).Methods("POST")
-	api.HandleFunc("/quotes/random", handlers.GetRandomQuote).Methods("GET")
-	api.HandleFunc("/quotes/random/{category}", handlers.GetRandomQuoteByCategory).Methods("GET")
+	// API routes
+	v1 := r.Group("/api/v1")
+	{
+		// Quote endpoints
+		v1.POST("/quotes", middleware.ValidationMiddleware(), quoteHandler.CreateQuote)
+		v1.GET("/quotes/random", quoteHandler.GetRandomQuote)
+		v1.GET("/quotes", quoteHandler.GetAllQuotes)
+		v1.GET("/quotes/search", quoteHandler.SearchQuotes)
+	}
 
 	return r
 }

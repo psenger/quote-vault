@@ -8,32 +8,33 @@ import (
 	"quote-vault/errors"
 	"quote-vault/services"
 	"quote-vault/utils"
-	"quote-vault/validators"
 )
 
 type QuoteHandler struct {
-	service *services.QuoteService
+	quoteService *services.QuoteService
 }
 
-func NewQuoteHandler(service *services.QuoteService) *QuoteHandler {
-	return &QuoteHandler{service: service}
+func NewQuoteHandler(quoteService *services.QuoteService) *QuoteHandler {
+	return &QuoteHandler{
+		quoteService: quoteService,
+	}
 }
 
 func (h *QuoteHandler) CreateQuote(c *gin.Context) {
-	var req validators.CreateQuoteRequest
+	var req struct {
+		Text     string `json:"text" binding:"required"`
+		Author   string `json:"author" binding:"required"`
+		Category string `json:"category" binding:"required"`
+	}
+
 	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid request body", err)
+		utils.ErrorResponse(c, http.StatusBadRequest, errors.ErrInvalidRequest.Error())
 		return
 	}
 
-	if err := validators.ValidateCreateQuote(&req); err != nil {
-		utils.ErrorResponse(c, http.StatusBadRequest, "Validation failed", err)
-		return
-	}
-
-	quote, err := h.service.CreateQuote(req.Text, req.Author, req.Category)
+	quote, err := h.quoteService.CreateQuote(req.Text, req.Author, req.Category)
 	if err != nil {
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to create quote", err)
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -43,23 +44,18 @@ func (h *QuoteHandler) CreateQuote(c *gin.Context) {
 func (h *QuoteHandler) GetRandomQuote(c *gin.Context) {
 	category := c.Query("category")
 
-	quote, err := h.service.GetRandomQuote(category)
+	quote, err := h.quoteService.GetRandomQuote(category)
 	if err != nil {
-		if err == errors.ErrQuoteNotFound {
-			utils.ErrorResponse(c, http.StatusNotFound, "No quotes found", err)
-			return
-		}
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to get random quote", err)
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, "Random quote retrieved successfully", quote)
+	utils.SuccessResponse(c, http.StatusOK, "Random quote retrieved", quote)
 }
 
-func (h *QuoteHandler) ListQuotes(c *gin.Context) {
+func (h *QuoteHandler) GetAllQuotes(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	category := c.Query("category")
 
 	if page < 1 {
 		page = 1
@@ -68,18 +64,18 @@ func (h *QuoteHandler) ListQuotes(c *gin.Context) {
 		limit = 10
 	}
 
-	quotes, total, err := h.service.ListQuotes(page, limit, category)
+	quotes, total, err := h.quoteService.GetAllQuotes(page, limit)
 	if err != nil {
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to list quotes", err)
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	response := map[string]interface{}{
 		"quotes": quotes,
 		"pagination": map[string]interface{}{
-			"page":       page,
-			"limit":      limit,
-			"total":      total,
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
 			"total_pages": (total + limit - 1) / limit,
 		},
 	}
@@ -88,12 +84,9 @@ func (h *QuoteHandler) ListQuotes(c *gin.Context) {
 }
 
 func (h *QuoteHandler) SearchQuotes(c *gin.Context) {
-	query := c.Query("q")
-	if query == "" {
-		utils.ErrorResponse(c, http.StatusBadRequest, "Search query is required", nil)
-		return
-	}
-
+	text := c.Query("text")
+	author := c.Query("author")
+	category := c.Query("category")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 
@@ -104,22 +97,31 @@ func (h *QuoteHandler) SearchQuotes(c *gin.Context) {
 		limit = 10
 	}
 
-	quotes, total, err := h.service.SearchQuotes(query, page, limit)
+	if text == "" && author == "" && category == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "At least one search parameter (text, author, or category) is required")
+		return
+	}
+
+	quotes, total, err := h.quoteService.SearchQuotes(text, author, category, page, limit)
 	if err != nil {
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to search quotes", err)
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	response := map[string]interface{}{
 		"quotes": quotes,
-		"query":  query,
 		"pagination": map[string]interface{}{
-			"page":       page,
-			"limit":      limit,
-			"total":      total,
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
 			"total_pages": (total + limit - 1) / limit,
+		},
+		"search_params": map[string]string{
+			"text":     text,
+			"author":   author,
+			"category": category,
 		},
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, "Search results retrieved successfully", response)
+	utils.SuccessResponse(c, http.StatusOK, "Search completed successfully", response)
 }

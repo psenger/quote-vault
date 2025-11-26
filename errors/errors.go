@@ -5,44 +5,65 @@ import (
 	"net/http"
 )
 
-type APIError struct {
-	Message    string `json:"message"`
-	StatusCode int    `json:"status_code"`
-	Type       string `json:"type"`
+// AppError represents an application error with HTTP status code
+type AppError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Err     error  `json:"-"`
 }
 
-func (e *APIError) Error() string {
+// Error implements the error interface
+func (e *AppError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Err)
+	}
 	return e.Message
 }
 
-func NewValidationError(message string) *APIError {
-	return &APIError{
-		Message:    message,
-		StatusCode: http.StatusBadRequest,
-		Type:       "validation_error",
+// Unwrap returns the underlying error
+func (e *AppError) Unwrap() error {
+	return e.Err
+}
+
+// Common error constructors
+func NewBadRequest(message string) *AppError {
+	return &AppError{
+		Code:    http.StatusBadRequest,
+		Message: message,
 	}
 }
 
-func NewNotFoundError(message string) *APIError {
-	return &APIError{
-		Message:    message,
-		StatusCode: http.StatusNotFound,
-		Type:       "not_found_error",
+func NewNotFound(resource string) *AppError {
+	return &AppError{
+		Code:    http.StatusNotFound,
+		Message: fmt.Sprintf("%s not found", resource),
 	}
 }
 
-func NewDatabaseError(message string) *APIError {
-	return &APIError{
-		Message:    fmt.Sprintf("Database error: %s", message),
-		StatusCode: http.StatusInternalServerError,
-		Type:       "database_error",
+func NewInternalError(err error) *AppError {
+	return &AppError{
+		Code:    http.StatusInternalServerError,
+		Message: "Internal server error",
+		Err:     err,
 	}
 }
 
-func NewInternalServerError(message string) *APIError {
-	return &APIError{
-		Message:    message,
-		StatusCode: http.StatusInternalServerError,
-		Type:       "internal_server_error",
+func NewValidationError(field, message string) *AppError {
+	return &AppError{
+		Code:    http.StatusBadRequest,
+		Message: fmt.Sprintf("Validation error for field '%s': %s", field, message),
 	}
+}
+
+func NewConflictError(message string) *AppError {
+	return &AppError{
+		Code:    http.StatusConflict,
+		Message: message,
+	}
+}
+
+// IsAppError checks if an error is an AppError
+func IsAppError(err error) (*AppError, bool) {
+	appErr, ok := err.(*AppError)
+	return appErr, ok
 }

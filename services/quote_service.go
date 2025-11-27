@@ -4,85 +4,56 @@ import (
 	"quote-vault/errors"
 	"quote-vault/models"
 	"quote-vault/repository"
-	"strconv"
-
-	"github.com/gin-gonic/gin"
 )
 
 type QuoteService struct {
-	repo repository.QuoteRepository
+	quoteRepo *repository.QuoteRepository
 }
 
-func NewQuoteService(repo repository.QuoteRepository) *QuoteService {
+func NewQuoteService(quoteRepo *repository.QuoteRepository) *QuoteService {
 	return &QuoteService{
-		repo: repo,
+		quoteRepo: quoteRepo,
 	}
 }
 
-func (s *QuoteService) CreateQuote(quote *models.Quote) error {
-	return s.repo.Create(quote)
+func (s *QuoteService) CreateQuote(quote *models.Quote) (*models.Quote, error) {
+	if quote.Text == "" {
+		return nil, errors.ErrEmptyQuoteText
+	}
+
+	if quote.Author == "" {
+		return nil, errors.ErrEmptyAuthor
+	}
+
+	if quote.Category == "" {
+		quote.Category = "general"
+	}
+
+	return s.quoteRepo.Create(quote)
+}
+
+func (s *QuoteService) GetQuotes(limit, offset int, category string) ([]*models.Quote, int, error) {
+	if category == "" {
+		return s.quoteRepo.GetAll(limit, offset)
+	}
+	return s.quoteRepo.GetByCategory(category, limit, offset)
+}
+
+func (s *QuoteService) GetQuoteByID(id int) (*models.Quote, error) {
+	if id <= 0 {
+		return nil, errors.ErrInvalidID
+	}
+
+	return s.quoteRepo.GetByID(id)
 }
 
 func (s *QuoteService) GetRandomQuote(category string) (*models.Quote, error) {
 	if category == "" {
-		return s.repo.GetRandom()
+		return s.quoteRepo.GetRandom()
 	}
-	return s.repo.GetRandomByCategory(category)
+	return s.quoteRepo.GetRandomByCategory(category)
 }
 
-type PaginatedQuotes struct {
-	Quotes     []*models.Quote `json:"quotes"`
-	TotalCount int64           `json:"total_count"`
-	Page       int             `json:"page"`
-	Limit      int             `json:"limit"`
-	HasNext    bool            `json:"has_next"`
-	HasPrev    bool            `json:"has_prev"`
-}
-
-func (s *QuoteService) GetQuotes(c *gin.Context) (*PaginatedQuotes, error) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	category := c.Query("category")
-
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
-
-	offset := (page - 1) * limit
-
-	var quotes []*models.Quote
-	var totalCount int64
-	var err error
-
-	if category != "" {
-		quotes, err = s.repo.GetByCategory(category, limit, offset)
-		if err != nil {
-			return nil, errors.NewInternalServerError("Failed to fetch quotes by category")
-		}
-		totalCount, err = s.repo.CountByCategory(category)
-	} else {
-		quotes, err = s.repo.GetAll(limit, offset)
-		if err != nil {
-			return nil, errors.NewInternalServerError("Failed to fetch quotes")
-		}
-		totalCount, err = s.repo.Count()
-	}
-
-	if err != nil {
-		return nil, errors.NewInternalServerError("Failed to count quotes")
-	}
-
-	totalPages := int((totalCount + int64(limit) - 1) / int64(limit))
-
-	return &PaginatedQuotes{
-		Quotes:     quotes,
-		TotalCount: totalCount,
-		Page:       page,
-		Limit:      limit,
-		HasNext:    page < totalPages,
-		HasPrev:    page > 1,
-	}, nil
+func (s *QuoteService) GetCategories() ([]string, error) {
+	return s.quoteRepo.GetCategories()
 }

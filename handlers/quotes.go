@@ -1,82 +1,97 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
+
 	"quote-vault/errors"
 	"quote-vault/models"
 	"quote-vault/services"
 	"quote-vault/utils"
 	"quote-vault/validators"
-
-	"github.com/gin-gonic/gin"
 )
 
 type QuoteHandler struct {
-	service   *services.QuoteService
-	validator *validators.QuoteValidator
+	quoteService *services.QuoteService
 }
 
-func NewQuoteHandler(service *services.QuoteService, validator *validators.QuoteValidator) *QuoteHandler {
+func NewQuoteHandler(quoteService *services.QuoteService) *QuoteHandler {
 	return &QuoteHandler{
-		service:   service,
-		validator: validator,
+		quoteService: quoteService,
 	}
 }
 
-// CreateQuote handles POST /quotes
-func (h *QuoteHandler) CreateQuote(c *gin.Context) {
+func (h *QuoteHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
 	var quote models.Quote
-
-	if err := c.ShouldBindJSON(&quote); err != nil {
-		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid request body")
+	if err := json.NewDecoder(r.Body).Decode(&quote); err != nil {
+		utils.ErrorResponse(w, errors.ErrInvalidJSON, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.validator.ValidateQuote(&quote); err != nil {
-		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+	if err := validators.ValidateQuote(&quote); err != nil {
+		utils.ErrorResponse(w, err, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.service.CreateQuote(&quote); err != nil {
-		if appErr, ok := err.(*errors.AppError); ok {
-			utils.ErrorResponse(c, appErr.Code, appErr.Message)
-			return
-		}
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to create quote")
+	createdQuote, err := h.quoteService.CreateQuote(&quote)
+	if err != nil {
+		utils.ErrorResponse(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusCreated, quote, "Quote created successfully")
+	utils.SuccessResponse(w, createdQuote, http.StatusCreated)
 }
 
-// GetQuotes handles GET /quotes
-func (h *QuoteHandler) GetQuotes(c *gin.Context) {
-	result, err := h.service.GetQuotes(c)
+func (h *QuoteHandler) GetQuotes(w http.ResponseWriter, r *http.Request) {
+	paginationParams := utils.NewPaginationParams(r)
+	category := r.URL.Query().Get("category")
+
+	quotes, total, err := h.quoteService.GetQuotes(paginationParams.Limit, paginationParams.Offset, category)
 	if err != nil {
-		if appErr, ok := err.(*errors.AppError); ok {
-			utils.ErrorResponse(c, appErr.Code, appErr.Message)
-			return
-		}
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to fetch quotes")
+		utils.ErrorResponse(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, result, "Quotes retrieved successfully")
+	paginationMeta := paginationParams.CalculateMeta(total)
+	response := utils.NewPaginatedResponse(quotes, paginationMeta)
+
+	utils.SuccessResponse(w, response, http.StatusOK)
 }
 
-// GetRandomQuote handles GET /quotes/random
-func (h *QuoteHandler) GetRandomQuote(c *gin.Context) {
-	category := c.Query("category")
-
-	quote, err := h.service.GetRandomQuote(category)
+func (h *QuoteHandler) GetQuoteByID(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Path[len("/quotes/"):]
+	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		if appErr, ok := err.(*errors.AppError); ok {
-			utils.ErrorResponse(c, appErr.Code, appErr.Message)
-			return
-		}
-		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to fetch random quote")
+		utils.ErrorResponse(w, errors.ErrInvalidID, http.StatusBadRequest)
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, quote, "Random quote retrieved successfully")
+	quote, err := h.quoteService.GetQuoteByID(id)
+	if err != nil {
+		if err == errors.ErrQuoteNotFound {
+			utils.ErrorResponse(w, err, http.StatusNotFound)
+			return
+		}
+		utils.ErrorResponse(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	utils.SuccessResponse(w, quote, http.StatusOK)
+}
+
+func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
+	category := r.URL.Query().Get("category")
+
+	quote, err := h.quoteService.GetRandomQuote(category)
+	if err != nil {
+		if err == errors.ErrQuoteNotFound {
+			utils.ErrorResponse(w, err, http.StatusNotFound)
+			return
+		}
+		utils.ErrorResponse(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	utils.SuccessResponse(w, quote, http.StatusOK)
 }

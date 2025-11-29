@@ -1,91 +1,82 @@
 package utils
 
-import (
-	"encoding/json"
-	"net/http"
-
-	appErrors "quote-vault/errors"
-	"quote-vault/middleware"
-)
-
-// SuccessResponse represents a successful API response
-type SuccessResponse struct {
+// Response represents a standard API response structure
+type Response struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
-	Message string      `json:"message,omitempty"`
+	Error   *ErrorDetail `json:"error,omitempty"`
+	Meta    *MetaData   `json:"meta,omitempty"`
 }
 
-// PaginatedResponse represents a paginated API response
+// ErrorDetail represents detailed error information
+type ErrorDetail struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+// MetaData represents metadata for responses (pagination, etc.)
+type MetaData struct {
+	Page       int `json:"page,omitempty"`
+	Limit      int `json:"limit,omitempty"`
+	TotalItems int `json:"total_items,omitempty"`
+	TotalPages int `json:"total_pages,omitempty"`
+}
+
+// SuccessResponse creates a successful response
+func SuccessResponse(data interface{}) Response {
+	return Response{
+		Success: true,
+		Data:    data,
+	}
+}
+
+// SuccessResponseWithMeta creates a successful response with metadata
+func SuccessResponseWithMeta(data interface{}, meta *MetaData) Response {
+	return Response{
+		Success: true,
+		Data:    data,
+		Meta:    meta,
+	}
+}
+
+// ErrorResponse creates an error response
+type ErrorResponse struct {
+	Success bool         `json:"success"`
+	Error   *ErrorDetail `json:"error"`
+}
+
+// PaginatedResponse represents a paginated response
 type PaginatedResponse struct {
-	Success    bool        `json:"success"`
-	Data       interface{} `json:"data"`
-	Pagination Pagination  `json:"pagination"`
+	Success bool        `json:"success"`
+	Data    interface{} `json:"data"`
+	Meta    MetaData    `json:"meta"`
 }
 
-// Pagination represents pagination metadata
-type Pagination struct {
-	Page       int   `json:"page"`
-	Limit      int   `json:"limit"`
-	Total      int64 `json:"total"`
-	TotalPages int   `json:"total_pages"`
-}
+// NewPaginatedResponse creates a new paginated response
+func NewPaginatedResponse(data interface{}, page, limit, totalItems int) PaginatedResponse {
+	totalPages := (totalItems + limit - 1) / limit // Ceiling division
+	if totalPages < 1 {
+		totalPages = 1
+	}
 
-// WriteJSON writes a JSON response to the response writer
-func WriteJSON(w http.ResponseWriter, statusCode int, data interface{}) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	return json.NewEncoder(w).Encode(data)
-}
-
-// WriteSuccess writes a successful JSON response
-func WriteSuccess(w http.ResponseWriter, data interface{}, message string) error {
-	response := SuccessResponse{
+	return PaginatedResponse{
 		Success: true,
 		Data:    data,
-		Message: message,
+		Meta: MetaData{
+			Page:       page,
+			Limit:      limit,
+			TotalItems: totalItems,
+			TotalPages: totalPages,
+		},
 	}
-	return WriteJSON(w, http.StatusOK, response)
 }
 
-// WriteCreated writes a successful creation response
-func WriteCreated(w http.ResponseWriter, data interface{}) error {
-	response := SuccessResponse{
-		Success: true,
-		Data:    data,
-		Message: "Resource created successfully",
-	}
-	return WriteJSON(w, http.StatusCreated, response)
-}
-
-// WritePaginated writes a paginated response
-func WritePaginated(w http.ResponseWriter, data interface{}, pagination Pagination) error {
-	response := PaginatedResponse{
-		Success:    true,
-		Data:       data,
-		Pagination: pagination,
-	}
-	return WriteJSON(w, http.StatusOK, response)
-}
-
-// WriteError writes an error response using the error handler middleware
-func WriteError(w http.ResponseWriter, r *http.Request, err error) {
-	middleware.HandleError(w, r, err)
-}
-
-// WriteValidationError writes a validation error response
-func WriteValidationError(w http.ResponseWriter, r *http.Request, message string, err error) {
-	appErr := appErrors.NewValidationError(message, err)
-	WriteError(w, r, appErr)
-}
-
-// WriteNotFoundError writes a not found error response
-func WriteNotFoundError(w http.ResponseWriter, r *http.Request, resource string) {
-	appErr := appErrors.NewNotFoundError(resource)
-	WriteError(w, r, appErr)
-}
-
-// WriteInternalError writes an internal server error response
-func WriteInternalError(w http.ResponseWriter, r *http.Request, message string, err error) {
-	appErr := appErrors.NewInternalError(message, err)
-	WriteError(w, r, appErr)
+// HealthResponse represents a health check response
+type HealthResponse struct {
+	Status    string            `json:"status"`
+	Version   string            `json:"version,omitempty"`
+	Timestamp string            `json:"timestamp"`
+	Checks    map[string]string `json:"checks,omitempty"`
 }

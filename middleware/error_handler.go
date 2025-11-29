@@ -4,89 +4,89 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-
-	appErrors "quote-vault/errors"
+	"quote-vault/errors"
+	"quote-vault/utils"
 )
 
-// ErrorResponse represents the structure of error responses
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Type    string `json:"type,omitempty"`
-	Code    int    `json:"code"`
-	Message string `json:"message,omitempty"`
-}
+// ErrorHandler middleware handles application errors and converts them to JSON responses
+func ErrorHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Create a custom ResponseWriter to capture panics and errors
+		ew := &errorResponseWriter{
+			ResponseWriter: w,
+			request:        r,
+		}
 
-// ErrorHandler middleware handles application errors and converts them to HTTP responses
-func ErrorHandler() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Create a custom response writer to capture errors
-			cw := &customWriter{
-				ResponseWriter: w,
-				request:        r,
+		// Recover from panics
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Panic recovered: %v", err)
+				handleError(w, r, errors.NewInternalError("An unexpected error occurred"))
 			}
+		}()
 
-			next.ServeHTTP(cw, r)
-		})
-	}
+		next.ServeHTTP(ew, r)
+	})
 }
 
-// customWriter wraps the response writer to handle panics
-type customWriter struct {
+// errorResponseWriter wraps http.ResponseWriter to handle errors
+type errorResponseWriter struct {
 	http.ResponseWriter
 	request *http.Request
+	written bool
 }
 
-// HandleError processes application errors and sends appropriate HTTP responses
-func HandleError(w http.ResponseWriter, r *http.Request, err error) {
-	w.Header().Set("Content-Type", "application/json")
+// WriteError writes an error response
+func (ew *errorResponseWriter) WriteError(err error) {
+	if ew.written {
+		return
+	}
+	handleError(ew.ResponseWriter, ew.request, err)
+	ew.written = true
+}
 
-	// Check if it's our custom AppError
-	if appErr, ok := err.(*appErrors.AppError); ok {
-		response := ErrorResponse{
-			Error:   appErr.Message,
-			Type:    string(appErr.Type),
-			Code:    appErr.Code,
-			Message: appErr.Message,
-		}
-
-		// Log internal errors
-		if appErr.Type == appErrors.ErrorTypeInternal || appErr.Type == appErrors.ErrorTypeDatabase {
-			log.Printf("Internal error on %s %s: %v", r.Method, r.URL.Path, appErr)
-		}
-
-		w.WriteHeader(appErr.Code)
-		json.NewEncoder(w).Encode(response)
+// handleError processes and responds to errors
+func handleError(w http.ResponseWriter, r *http.Request, err error) {
+	if err == nil {
 		return
 	}
 
-	// Handle generic errors
-	log.Printf("Unhandled error on %s %s: %v", r.Method, r.URL.Path, err)
-	response := ErrorResponse{
-		Error:   "Internal server error",
-		Type:    string(appErrors.ErrorTypeInternal),
-		Code:    http.StatusInternalServerError,
-		Message: "An unexpected error occurred",
+	// Log the error with request context
+	log.Printf("Error handling request %s %s: %v", r.Method, r.URL.Path, err)
+
+	// Handle different error types
+	var appErr *errors.AppError
+	switch e := err.(type) {
+	case *errors.AppError:
+		appErr = e
+	case error:
+		// Convert generic errors to internal server errors
+		appErr = errors.NewInternalError("An internal error occurred")
+	default:
+		appErr = errors.NewInternalError("Unknown error")
 	}
 
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(response)
-}
+	// Set content type and status code
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(appErr.Code)
 
-// RecoverPanic recovers from panics and converts them to internal server errors
-func RecoverPanic() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer func() {
-				if rec := recover(); rec != nil {
-					log.Printf("Panic recovered on %s %s: %v", r.Method, r.URL.Path, rec)
-					
-					err := appErrors.NewInternalError("Server panic occurred", nil)
-					HandleError(w, r, err)
-				}
-			}()
+	// Create error response
+	errorResponse := utils.ErrorResponse{
+		Success: false,
+		Error: &utils.ErrorDetail{
+			Code:    appErr.Code,
+			Message: appErr.Message,
+			Type:    appErr.Type,
+			Detail:  appErr.Detail,
+		},
+	}
 
-			next.ServeHTTP(w, r)
-		})
+	// Encode and send response
+	if err := json.NewEncoder(w).Encode(errorResponse); err != nil {
+		log.Printf("Error encoding error response: %v", err)
+		// Fallback to plain text
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Internal Server Error"))
 	}
 }

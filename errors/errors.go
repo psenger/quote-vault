@@ -5,65 +5,85 @@ import (
 	"net/http"
 )
 
-// AppError represents an application error with HTTP status code
+// AppError represents an application error with additional context
 type AppError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-	Err     error  `json:"-"`
+	Type    string `json:"type"`
+	Detail  string `json:"detail,omitempty"`
 }
 
-// Error implements the error interface
 func (e *AppError) Error() string {
-	if e.Err != nil {
-		return fmt.Sprintf("%s: %v", e.Message, e.Err)
+	return fmt.Sprintf("%s: %s", e.Type, e.Message)
+}
+
+// Error types
+const (
+	TypeValidation   = "validation_error"
+	TypeNotFound     = "not_found"
+	TypeDatabase     = "database_error"
+	TypeInternal     = "internal_error"
+	TypeBadRequest   = "bad_request"
+	TypeConflict     = "conflict"
+)
+
+// Common errors
+var (
+	ErrQuoteNotFound = &AppError{
+		Code:    http.StatusNotFound,
+		Message: "Quote not found",
+		Type:    TypeNotFound,
 	}
-	return e.Message
-}
 
-// Unwrap returns the underlying error
-func (e *AppError) Unwrap() error {
-	return e.Err
-}
+	ErrInvalidCategory = &AppError{
+		Code:    http.StatusBadRequest,
+		Message: "Invalid category specified",
+		Type:    TypeBadRequest,
+	}
 
-// Common error constructors
-func NewBadRequest(message string) *AppError {
+	ErrInvalidPagination = &AppError{
+		Code:    http.StatusBadRequest,
+		Message: "Invalid pagination parameters",
+		Type:    TypeBadRequest,
+	}
+
+	ErrDatabaseConnection = &AppError{
+		Code:    http.StatusInternalServerError,
+		Message: "Database connection failed",
+		Type:    TypeDatabase,
+	}
+
+	ErrQuoteExists = &AppError{
+		Code:    http.StatusConflict,
+		Message: "Quote already exists",
+		Type:    TypeConflict,
+	}
+)
+
+// NewValidationError creates a new validation error with specific details
+func NewValidationError(message, detail string) *AppError {
 	return &AppError{
 		Code:    http.StatusBadRequest,
 		Message: message,
+		Type:    TypeValidation,
+		Detail:  detail,
 	}
 }
 
-func NewNotFound(resource string) *AppError {
-	return &AppError{
-		Code:    http.StatusNotFound,
-		Message: fmt.Sprintf("%s not found", resource),
-	}
-}
-
-func NewInternalError(err error) *AppError {
+// NewDatabaseError creates a new database error
+func NewDatabaseError(message string) *AppError {
 	return &AppError{
 		Code:    http.StatusInternalServerError,
-		Message: "Internal server error",
-		Err:     err,
-	}
-}
-
-func NewValidationError(field, message string) *AppError {
-	return &AppError{
-		Code:    http.StatusBadRequest,
-		Message: fmt.Sprintf("Validation error for field '%s': %s", field, message),
-	}
-}
-
-func NewConflictError(message string) *AppError {
-	return &AppError{
-		Code:    http.StatusConflict,
 		Message: message,
+		Type:    TypeDatabase,
 	}
 }
 
-// IsAppError checks if an error is an AppError
-func IsAppError(err error) (*AppError, bool) {
-	appErr, ok := err.(*AppError)
-	return appErr, ok
+// NewInternalError creates a new internal server error
+func NewInternalError(message string) *AppError {
+	return &AppError{
+		Code:    http.StatusInternalServerError,
+		Message: message,
+		Type:    TypeInternal,
+	}
 }

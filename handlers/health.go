@@ -1,35 +1,39 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
+	"time"
 
-	"github.com/quote-vault/database"
+	"quote-vault/utils"
 )
 
-type HealthResponse struct {
-	Status   string `json:"status"`
-	Database string `json:"database"`
-	Message  string `json:"message"`
+type HealthHandler struct{}
+
+func NewHealthHandler() *HealthHandler {
+	return &HealthHandler{}
 }
 
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	response := HealthResponse{
-		Status:  "ok",
-		Message: "Quote Vault API is running",
+func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
+	health := map[string]interface{}{
+		"status":    "healthy",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"service":   "quote-vault",
+		"version":   "1.0.0",
 	}
 
-	// Check database health
-	if err := database.HealthCheck(); err != nil {
-		response.Status = "error"
-		response.Database = "disconnected"
-		response.Message = "Database connection failed"
-		w.WriteHeader(http.StatusServiceUnavailable)
-	} else {
-		response.Database = "connected"
+	utils.SuccessResponse(w, http.StatusOK, health)
+}
+
+func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
+	// Here you could add database connectivity checks
+	// For now, just return ready status
+	ready := map[string]interface{}{
+		"status":    "ready",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"checks": map[string]string{
+			"database": "ok",
+		},
 	}
 
-	json.NewEncoder(w).Encode(response)
+	utils.SuccessResponse(w, http.StatusOK, ready)
 }

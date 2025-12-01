@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"quote-vault/errors"
-	"quote-vault/models"
 	"quote-vault/services"
 	"quote-vault/utils"
 	"quote-vault/validators"
@@ -23,61 +22,28 @@ func NewQuoteHandler(quoteService *services.QuoteService) *QuoteHandler {
 }
 
 func (h *QuoteHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
-	var quote models.Quote
-	if err := json.NewDecoder(r.Body).Decode(&quote); err != nil {
-		utils.ErrorResponse(w, errors.ErrInvalidJSON, http.StatusBadRequest)
+	var req validators.CreateQuoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.ErrorResponse(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 
-	if err := validators.ValidateQuote(&quote); err != nil {
-		utils.ErrorResponse(w, err, http.StatusBadRequest)
+	if err := validators.ValidateCreateQuote(&req); err != nil {
+		utils.ErrorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	createdQuote, err := h.quoteService.CreateQuote(&quote)
+	quote, err := h.quoteService.CreateQuote(req.Text, req.Author, req.Category)
 	if err != nil {
-		utils.ErrorResponse(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	utils.SuccessResponse(w, createdQuote, http.StatusCreated)
-}
-
-func (h *QuoteHandler) GetQuotes(w http.ResponseWriter, r *http.Request) {
-	paginationParams := utils.NewPaginationParams(r)
-	category := r.URL.Query().Get("category")
-
-	quotes, total, err := h.quoteService.GetQuotes(paginationParams.Limit, paginationParams.Offset, category)
-	if err != nil {
-		utils.ErrorResponse(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	paginationMeta := paginationParams.CalculateMeta(total)
-	response := utils.NewPaginatedResponse(quotes, paginationMeta)
-
-	utils.SuccessResponse(w, response, http.StatusOK)
-}
-
-func (h *QuoteHandler) GetQuoteByID(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/quotes/"):]
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		utils.ErrorResponse(w, errors.ErrInvalidID, http.StatusBadRequest)
-		return
-	}
-
-	quote, err := h.quoteService.GetQuoteByID(id)
-	if err != nil {
-		if err == errors.ErrQuoteNotFound {
-			utils.ErrorResponse(w, err, http.StatusNotFound)
+		if customErr, ok := err.(*errors.ValidationError); ok {
+			utils.ErrorResponse(w, http.StatusBadRequest, customErr.Error())
 			return
 		}
-		utils.ErrorResponse(w, err, http.StatusInternalServerError)
+		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to create quote")
 		return
 	}
 
-	utils.SuccessResponse(w, quote, http.StatusOK)
+	utils.SuccessResponse(w, http.StatusCreated, quote)
 }
 
 func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
@@ -85,13 +51,42 @@ func (h *QuoteHandler) GetRandomQuote(w http.ResponseWriter, r *http.Request) {
 
 	quote, err := h.quoteService.GetRandomQuote(category)
 	if err != nil {
-		if err == errors.ErrQuoteNotFound {
-			utils.ErrorResponse(w, err, http.StatusNotFound)
+		if customErr, ok := err.(*errors.NotFoundError); ok {
+			utils.ErrorResponse(w, http.StatusNotFound, customErr.Error())
 			return
 		}
-		utils.ErrorResponse(w, err, http.StatusInternalServerError)
+		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to get random quote")
 		return
 	}
 
-	utils.SuccessResponse(w, quote, http.StatusOK)
+	utils.SuccessResponse(w, http.StatusOK, quote)
+}
+
+func (h *QuoteHandler) ListQuotes(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
+
+	category := r.URL.Query().Get("category")
+
+	quotes, total, err := h.quoteService.ListQuotes(page, limit, category)
+	if err != nil {
+		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to list quotes")
+		return
+	}
+
+	response := map[string]interface{}{
+		"quotes": quotes,
+		"total":  total,
+		"page":   page,
+		"limit":  limit,
+	}
+
+	utils.SuccessResponse(w, http.StatusOK, response)
 }

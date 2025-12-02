@@ -2,38 +2,53 @@ package handlers
 
 import (
 	"net/http"
-	"time"
-
+	"quote-vault/database"
 	"quote-vault/utils"
 )
 
-type HealthHandler struct{}
+type HealthHandler struct {
+	db database.Database
+}
 
-func NewHealthHandler() *HealthHandler {
-	return &HealthHandler{}
+func NewHealthHandler(db database.Database) *HealthHandler {
+	return &HealthHandler{db: db}
+}
+
+type HealthResponse struct {
+	Status   string `json:"status"`
+	Database string `json:"database"`
+	Version  string `json:"version"`
 }
 
 func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
-	health := map[string]interface{}{
-		"status":    "healthy",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"service":   "quote-vault",
-		"version":   "1.0.0",
+	response := HealthResponse{
+		Status:  "ok",
+		Version: "1.0.0",
 	}
 
-	utils.SuccessResponse(w, http.StatusOK, health)
+	// Test database connection
+	if err := h.db.Ping(); err != nil {
+		response.Database = "unhealthy"
+		response.Status = "degraded"
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		response.Database = "healthy"
+	}
+
+	utils.WriteJSONResponse(w, response)
 }
 
 func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
-	// Here you could add database connectivity checks
-	// For now, just return ready status
-	ready := map[string]interface{}{
-		"status":    "ready",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"checks": map[string]string{
-			"database": "ok",
-		},
+	// Check if database is accessible
+	if err := h.db.Ping(); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		utils.WriteJSONResponse(w, map[string]string{
+			"status": "not ready",
+			"reason": "database connection failed",
+		})
+		return
 	}
 
-	utils.SuccessResponse(w, http.StatusOK, ready)
+	w.WriteHeader(http.StatusOK)
+	utils.WriteJSONResponse(w, map[string]string{"status": "ready"})
 }

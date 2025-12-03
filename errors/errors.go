@@ -35,6 +35,24 @@ var (
 		Type:    TypeNotFound,
 	}
 
+	ErrEmptyQuoteText = &AppError{
+		Code:    http.StatusBadRequest,
+		Message: "Quote text cannot be empty",
+		Type:    TypeValidation,
+	}
+
+	ErrEmptyAuthor = &AppError{
+		Code:    http.StatusBadRequest,
+		Message: "Author cannot be empty",
+		Type:    TypeValidation,
+	}
+
+	ErrInvalidID = &AppError{
+		Code:    http.StatusBadRequest,
+		Message: "Invalid quote ID",
+		Type:    TypeValidation,
+	}
+
 	ErrInvalidCategory = &AppError{
 		Code:    http.StatusBadRequest,
 		Message: "Invalid category specified",

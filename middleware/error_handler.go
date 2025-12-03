@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"quote-vault/errors"
-	"quote-vault/utils"
 )
 
 // ErrorHandler middleware handles application errors and converts them to JSON responses
@@ -71,13 +70,13 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 	w.WriteHeader(appErr.Code)
 
 	// Create error response
-	errorResponse := utils.ErrorResponse{
-		Success: false,
-		Error: &utils.ErrorDetail{
-			Code:    appErr.Code,
-			Message: appErr.Message,
-			Type:    appErr.Type,
-			Detail:  appErr.Detail,
+	errorResponse := map[string]interface{}{
+		"success": false,
+		"error": map[string]interface{}{
+			"code":    appErr.Code,
+			"message": appErr.Message,
+			"type":    appErr.Type,
+			"detail":  appErr.Detail,
 		},
 	}
 

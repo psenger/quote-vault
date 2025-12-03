@@ -1,14 +1,10 @@
 package repository
 
 import (
-	"context"
 	"database/sql"
-	"fmt"
-	"strings"
-	"time"
 
-	"github.com/quote-vault/errors"
-	"github.com/quote-vault/models"
+	"quote-vault/errors"
+	"quote-vault/models"
 )
 
 // QuoteRepository handles database operations for quotes
@@ -24,121 +20,99 @@ func NewQuoteRepository(db *sql.DB) *QuoteRepository {
 }
 
 // Create adds a new quote to the database
-func (r *QuoteRepository) Create(ctx context.Context, quote *models.Quote) error {
-	query := `
-		INSERT INTO quotes (text, author, category, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id`
+func (r *QuoteRepository) Create(quote *models.Quote) (*models.Quote, error) {
+	query := `INSERT INTO quotes (text, author, category) VALUES (?, ?, ?)`
 
-	now := time.Now()
-	quote.CreatedAt = now
-	quote.UpdatedAt = now
-
-	err := r.db.QueryRowContext(ctx, query, quote.Text, quote.Author, quote.Category, quote.CreatedAt, quote.UpdatedAt).Scan(&quote.ID)
+	result, err := r.db.Exec(query, quote.Text, quote.Author, quote.Category)
 	if err != nil {
-		return errors.NewDatabaseError("failed to create quote", err)
+		return nil, errors.NewDatabaseError("failed to create quote")
 	}
 
-	return nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, errors.NewDatabaseError("failed to get last insert id")
+	}
+	quote.ID = int(id)
+
+	return quote, nil
 }
 
 // GetByID retrieves a quote by its ID
-func (r *QuoteRepository) GetByID(ctx context.Context, id int64) (*models.Quote, error) {
-	query := `
-		SELECT id, text, author, category, created_at, updated_at
-		FROM quotes
-		WHERE id = $1`
+func (r *QuoteRepository) GetByID(id int) (*models.Quote, error) {
+	query := `SELECT id, text, author, category, created_at FROM quotes WHERE id = ?`
 
 	quote := &models.Quote{}
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(query, id).Scan(
 		&quote.ID,
 		&quote.Text,
 		&quote.Author,
 		&quote.Category,
 		&quote.CreatedAt,
-		&quote.UpdatedAt,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, errors.NewNotFoundError("quote not found")
+			return nil, errors.ErrQuoteNotFound
 		}
-		return nil, errors.NewDatabaseError("failed to get quote", err)
+		return nil, errors.NewDatabaseError("failed to get quote")
 	}
 
 	return quote, nil
 }
 
-// GetRandom retrieves a random quote, optionally filtered by category
-func (r *QuoteRepository) GetRandom(ctx context.Context, category string) (*models.Quote, error) {
-	var query string
-	var args []interface{}
-
-	if category != "" {
-		query = `
-			SELECT id, text, author, category, created_at, updated_at
-			FROM quotes
-			WHERE category = $1
-			ORDER BY RANDOM()
-			LIMIT 1`
-		args = append(args, category)
-	} else {
-		query = `
-			SELECT id, text, author, category, created_at, updated_at
-			FROM quotes
-			ORDER BY RANDOM()
-			LIMIT 1`
-	}
+// GetRandom retrieves a random quote
+func (r *QuoteRepository) GetRandom() (*models.Quote, error) {
+	query := `SELECT id, text, author, category, created_at FROM quotes ORDER BY RANDOM() LIMIT 1`
 
 	quote := &models.Quote{}
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(
+	err := r.db.QueryRow(query).Scan(
 		&quote.ID,
 		&quote.Text,
 		&quote.Author,
 		&quote.Category,
 		&quote.CreatedAt,
-		&quote.UpdatedAt,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, errors.NewNotFoundError("no quotes found")
+			return nil, errors.ErrQuoteNotFound
 		}
-		return nil, errors.NewDatabaseError("failed to get random quote", err)
+		return nil, errors.NewDatabaseError("failed to get random quote")
 	}
 
 	return quote, nil
 }
 
-// GetAll retrieves all quotes with pagination and optional category filter
-func (r *QuoteRepository) GetAll(ctx context.Context, limit, offset int, category string) ([]*models.Quote, error) {
-	var query string
-	var args []interface{}
-	var whereClause string
+// GetRandomByCategory retrieves a random quote from a specific category
+func (r *QuoteRepository) GetRandomByCategory(category string) (*models.Quote, error) {
+	query := `SELECT id, text, author, category, created_at FROM quotes WHERE category = ? ORDER BY RANDOM() LIMIT 1`
 
-	// Build where clause if category is specified
-	if category != "" {
-		whereClause = "WHERE category = $1"
-		args = append(args, category)
-	}
-
-	// Build the complete query
-	query = fmt.Sprintf(`
-		SELECT id, text, author, category, created_at, updated_at
-		FROM quotes
-		%s
-		ORDER BY created_at DESC
-		LIMIT $%d OFFSET $%d`,
-		whereClause,
-		len(args)+1,
-		len(args)+2,
+	quote := &models.Quote{}
+	err := r.db.QueryRow(query, category).Scan(
+		&quote.ID,
+		&quote.Text,
+		&quote.Author,
+		&quote.Category,
+		&quote.CreatedAt,
 	)
 
-	args = append(args, limit, offset)
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.NewDatabaseError("failed to get quotes", err)
+		if err == sql.ErrNoRows {
+			return nil, errors.ErrQuoteNotFound
+		}
+		return nil, errors.NewDatabaseError("failed to get random quote by category")
+	}
+
+	return quote, nil
+}
+
+// GetAll retrieves all quotes with pagination
+func (r *QuoteRepository) GetAll(limit, offset int) ([]*models.Quote, int, error) {
+	query := `SELECT id, text, author, category, created_at FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?`
+
+	rows, err := r.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, 0, errors.NewDatabaseError("failed to get quotes")
 	}
 	defer rows.Close()
 
@@ -151,53 +125,66 @@ func (r *QuoteRepository) GetAll(ctx context.Context, limit, offset int, categor
 			&quote.Author,
 			&quote.Category,
 			&quote.CreatedAt,
-			&quote.UpdatedAt,
 		)
 		if err != nil {
-			return nil, errors.NewDatabaseError("failed to scan quote", err)
+			return nil, 0, errors.NewDatabaseError("failed to scan quote")
 		}
 		quotes = append(quotes, quote)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, errors.NewDatabaseError("error iterating rows", err)
+	// Get total count
+	var total int
+	err = r.db.QueryRow("SELECT COUNT(*) FROM quotes").Scan(&total)
+	if err != nil {
+		return nil, 0, errors.NewDatabaseError("failed to get quote count")
 	}
 
-	return quotes, nil
+	return quotes, total, nil
 }
 
-// GetCount returns the total count of quotes, optionally filtered by category
-func (r *QuoteRepository) GetCount(ctx context.Context, category string) (int64, error) {
-	var query string
-	var args []interface{}
+// GetByCategory retrieves quotes by category with pagination
+func (r *QuoteRepository) GetByCategory(category string, limit, offset int) ([]*models.Quote, int, error) {
+	query := `SELECT id, text, author, category, created_at FROM quotes WHERE category = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 
-	if category != "" {
-		query = "SELECT COUNT(*) FROM quotes WHERE category = $1"
-		args = append(args, category)
-	} else {
-		query = "SELECT COUNT(*) FROM quotes"
-	}
-
-	var count int64
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	rows, err := r.db.Query(query, category, limit, offset)
 	if err != nil {
-		return 0, errors.NewDatabaseError("failed to get quote count", err)
+		return nil, 0, errors.NewDatabaseError("failed to get quotes by category")
+	}
+	defer rows.Close()
+
+	var quotes []*models.Quote
+	for rows.Next() {
+		quote := &models.Quote{}
+		err := rows.Scan(
+			&quote.ID,
+			&quote.Text,
+			&quote.Author,
+			&quote.Category,
+			&quote.CreatedAt,
+		)
+		if err != nil {
+			return nil, 0, errors.NewDatabaseError("failed to scan quote")
+		}
+		quotes = append(quotes, quote)
 	}
 
-	return count, nil
+	// Get total count for category
+	var total int
+	err = r.db.QueryRow("SELECT COUNT(*) FROM quotes WHERE category = ?", category).Scan(&total)
+	if err != nil {
+		return nil, 0, errors.NewDatabaseError("failed to get quote count")
+	}
+
+	return quotes, total, nil
 }
 
 // GetCategories returns all unique categories
-func (r *QuoteRepository) GetCategories(ctx context.Context) ([]string, error) {
-	query := `
-		SELECT DISTINCT category
-		FROM quotes
-		WHERE category IS NOT NULL AND category != ''
-		ORDER BY category`
+func (r *QuoteRepository) GetCategories() ([]string, error) {
+	query := `SELECT DISTINCT category FROM quotes WHERE category IS NOT NULL AND category != '' ORDER BY category`
 
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.db.Query(query)
 	if err != nil {
-		return nil, errors.NewDatabaseError("failed to get categories", err)
+		return nil, errors.NewDatabaseError("failed to get categories")
 	}
 	defer rows.Close()
 
@@ -205,60 +192,10 @@ func (r *QuoteRepository) GetCategories(ctx context.Context) ([]string, error) {
 	for rows.Next() {
 		var category string
 		if err := rows.Scan(&category); err != nil {
-			return nil, errors.NewDatabaseError("failed to scan category", err)
+			return nil, errors.NewDatabaseError("failed to scan category")
 		}
 		categories = append(categories, category)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, errors.NewDatabaseError("error iterating category rows", err)
-	}
-
 	return categories, nil
-}
-
-// Search searches for quotes by text, author, or category
-func (r *QuoteRepository) Search(ctx context.Context, searchTerm string, limit, offset int) ([]*models.Quote, error) {
-	if strings.TrimSpace(searchTerm) == "" {
-		return r.GetAll(ctx, limit, offset, "")
-	}
-
-	searchPattern := "%" + strings.ToLower(searchTerm) + "%"
-	query := `
-		SELECT id, text, author, category, created_at, updated_at
-		FROM quotes
-		WHERE LOWER(text) LIKE $1
-		   OR LOWER(author) LIKE $1
-		   OR LOWER(category) LIKE $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`
-
-	rows, err := r.db.QueryContext(ctx, query, searchPattern, limit, offset)
-	if err != nil {
-		return nil, errors.NewDatabaseError("failed to search quotes", err)
-	}
-	defer rows.Close()
-
-	var quotes []*models.Quote
-	for rows.Next() {
-		quote := &models.Quote{}
-		err := rows.Scan(
-			&quote.ID,
-			&quote.Text,
-			&quote.Author,
-			&quote.Category,
-			&quote.CreatedAt,
-			&quote.UpdatedAt,
-		)
-		if err != nil {
-			return nil, errors.NewDatabaseError("failed to scan search result", err)
-		}
-		quotes = append(quotes, quote)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, errors.NewDatabaseError("error iterating search results", err)
-	}
-
-	return quotes, nil
 }

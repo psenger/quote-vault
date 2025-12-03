@@ -2,18 +2,18 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"quote-vault/config"
 	"quote-vault/database"
-	"quote-vault/middleware"
+	"quote-vault/handlers"
+	"quote-vault/repository"
 	"quote-vault/router"
+	"quote-vault/services"
 )
 
 func main() {
@@ -22,17 +22,20 @@ func main() {
 	httpCfg := config.GetHTTPConfig()
 
 	// Initialize database
-	db, err := database.Initialize(cfg.DatabaseURL)
+	db, err := database.NewSQLiteDB(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer db.Close()
 
-	// Setup router with middleware
-	r := router.SetupRoutes(db)
-	r.Use(middleware.LoggingMiddleware())
-	r.Use(middleware.CORSMiddleware())
-	r.Use(middleware.ErrorHandlerMiddleware())
+	// Setup repository, service, and handlers
+	quoteRepo := repository.NewQuoteRepository(db.DB())
+	quoteService := services.NewQuoteService(quoteRepo)
+	quoteHandler := handlers.NewQuoteHandler(quoteService)
+	healthHandler := handlers.NewHealthHandler(db)
+
+	// Setup router (middleware is configured inside router)
+	r := router.NewRouter(quoteHandler, healthHandler)
 
 	// Configure HTTP server
 	srv := &http.Server{

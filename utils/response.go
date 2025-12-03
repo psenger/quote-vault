@@ -16,7 +16,7 @@ type Response struct {
 	Status    int         `json:"status"`
 }
 
-type ErrorResponse struct {
+type ErrorResponseBody struct {
 	Success   bool   `json:"success"`
 	Error     string `json:"error"`
 	Timestamp string `json:"timestamp"`
@@ -44,7 +44,7 @@ func ErrorResponse(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
-	errorResponse := ErrorResponse{
+	errorResponse := ErrorResponseBody{
 		Success:   false,
 		Error:     message,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -55,6 +55,13 @@ func ErrorResponse(w http.ResponseWriter, status int, message string) {
 		log.Printf("Error encoding error response: %v", err)
 		// Fallback to basic error response
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+func WriteJSONResponse(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
 	}
 }
 
